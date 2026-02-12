@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>40 Hz Tone</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#111111" />
+  <link rel="icon" href="icon-192.png">
+
+  <style>
+    body { font-family: system-ui, Segoe UI, Arial, sans-serif; margin: 24px; color: #111; }
+    .card { max-width: 520px; padding: 18px; border: 1px solid #ddd; border-radius: 12px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0; }
+    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #ccc; cursor: pointer; }
+    input[type="range"] { width: 320px; }
+    .small { font-size: 12px; color: #444; line-height: 1.4; }
+    .pill { display: inline-block; padding: 3px 10px; border: 1px solid #ccc; border-radius: 999px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 style="margin-top:0">40 Hz Tone</h1>
+
+    <div class="row">
+      <button id="toggleBtn">Start</button>
+      <span class="pill" id="status">Stopped</span>
+    </div>
+
+    <div class="row">
+      <label for="vol">Volume</label>
+      <input id="vol" type="range" min="0" max="100" step="1">
+      <span id="volLabel" style="min-width:48px; text-align:right;"></span>
+    </div>
+
+    <p class="small">
+      Notes:
+      <br>• Browsers won’t allow audio to auto-play without a click/tap.
+      <br>• Volume + playing state are stored on this device.
+      <br>• Install as an app (Edge/Chrome → “Install app”) for a clean window.
+    </p>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "tone40hz.settings.v1";
+
+    const toggleBtn = document.getElementById("toggleBtn");
+    const statusEl  = document.getElementById("status");
+    const volEl     = document.getElementById("vol");
+    const volLabel  = document.getElementById("volLabel");
+
+    let audioCtx = null;
+    let osc = null;
+    let gain = null;
+
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return { volume: 20, playing: false };
+        const s = JSON.parse(raw);
+        return {
+          volume: Number.isFinite(s.volume) ? s.volume : 20,
+          playing: !!s.playing
+        };
+      } catch {
+        return { volume: 20, playing: false };
+      }
+    }
+
+    function saveSettings(partial) {
+      const current = loadSettings();
+      const next = { ...current, ...partial };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    }
+
+    function setUIPlaying(playing) {
+      toggleBtn.textContent = playing ? "Stop" : "Start";
+      statusEl.textContent = playing ? "Playing" : "Stopped";
+    }
+
+    function setUIMetersFromVolume(vol) {
+      volEl.value = String(vol);
+      volLabel.textContent = `${vol}%`;
+    }
+
+    function ensureAudioGraph() {
+      if (audioCtx) return;
+
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = 40;
+
+      gain = audioCtx.createGain();
+      gain.gain.value = 0.2;
+
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start();
+    }
+
+    async function startTone() {
+      ensureAudioGraph();
+
+      // Required on many browsers after creation if context is suspended.
+      if (audioCtx.state !== "running") {
+        await audioCtx.resume();
+      }
+
+      setUIPlaying(true);
+      saveSettings({ playing: true });
+    }
+
+    async function stopTone() {
+      if (!audioCtx) {
+        setUIPlaying(false);
+        saveSettings({ playing: false });
+        return;
+      }
+
+      // Suspend stops audio output but keeps oscillator alive for quick resume.
+      await audioCtx.suspend();
+
+      setUIPlaying(false);
+      saveSettings({ playing: false });
+    }
+
+    function setVolume(volPercent) {
+      const v = Math.max(0, Math.min(100, volPercent));
+      setUIMetersFromVolume(v);
+      saveSettings({ volume: v });
+
+      if (gain) {
+        // Convert 0–100% to gain value. Keep it simple & predictable.
+        gain.gain.value = v / 100;
+      }
+    }
+
+    // Init UI from stored settings
+    const initial = loadSettings();
+    setVolume(initial.volume);
+    setUIPlaying(false);
+
+    // Button click toggles play/stop (this click counts as the "user gesture")
+    toggleBtn.addEventListener("click", async () => {
+      const now = loadSettings();
+      if (now.playing) {
+        await stopTone();
+      } else {
+        await startTone();
+      }
+    });
+
+    // Slider changes
+    volEl.addEventListener("input", () => {
+      setVolume(parseInt(volEl.value, 10));
+    });
+
+    // On load: apply volume, and if user previously left it playing, try to resume.
+    // This will typically FAIL until a user clicks due to autoplay policies.
+    window.addEventListener("load", async () => {
+      const s = loadSettings();
+      setVolume(s.volume);
+
+      if (s.playing) {
+        try {
+          // attempt auto-resume; likely blocked until user gesture
+          await startTone();
+        } catch {
+          setUIPlaying(false);
+          saveSettings({ playing: false });
+        }
+      }
+    });
+
+    // Register service worker (PWA offline caching)
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js");
+    }
+  </script>
+</body>
+</html>
